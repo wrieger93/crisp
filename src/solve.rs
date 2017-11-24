@@ -1,0 +1,158 @@
+use std::collections::{VecDeque, HashSet};
+
+use var::{VarId, VarSet, DomainUpdate, Variable};
+use propagate::PropSet;
+
+#[derive(Debug, Default)]
+pub struct Solver {
+    state_stack: Vec<SearchState>,
+    initialized: bool,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct SearchState {
+    pub var_set: VarSet,
+    pub prop_set: PropSet,
+    pub instantiated_vars: HashSet<VarId>,
+}
+
+impl SearchState {
+    pub fn instantiate(
+        self,
+        var_id: VarId,
+        value: i32,
+    ) -> (Option<SearchState>, Option<SearchState>) {
+        let mut instantiated_state = self.clone();
+        let mut removed_state = self;
+
+        let mut instantiated_state_retval = None;
+        let mut removed_state_retval = None;
+
+        if let Ok(update) = removed_state.var_set.var_mut(var_id).remove(&value) {
+            match removed_state.propagate(update) {
+                Ok(()) => {
+                    removed_state_retval = Some(removed_state);
+                }
+                Err(()) => {}
+            }
+        }
+
+        if let Ok(update) = instantiated_state.var_set.var_mut(var_id).instantiate(
+            &value,
+        )
+        {
+            match instantiated_state.propagate(update) {
+                Ok(()) => {
+                    instantiated_state.instantiated_vars.insert(var_id);
+                    instantiated_state_retval = Some(instantiated_state);
+                }
+                Err(()) => {}
+            }
+        }
+
+        (instantiated_state_retval, removed_state_retval)
+    }
+
+    pub fn propagate(&mut self, update: DomainUpdate) -> Result<(), ()> {
+        let mut queue = VecDeque::new();
+        queue.push_back(update);
+        while !queue.is_empty() {
+            let latest_update = queue.pop_front().unwrap();
+            // for prop_id in self.prop_set.prop_ids().clone() {
+            for prop_id in self.var_set.subscriptions(latest_update.var_id()).clone() {
+                let new_updates = self.prop_set.propagator_mut(prop_id).propagate(
+                    &mut self.var_set,
+                    latest_update,
+                )?;
+                for update in new_updates {
+                    match update {
+                        DomainUpdate::Unchanged(_) => {}
+                        _ => {
+                            queue.push_back(update);
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn choose_var(&self) -> Option<VarId> {
+        self.var_set
+            .var_ids()
+            .iter()
+            .filter(|id| !self.instantiated_vars.contains(id))
+            .min_by_key(|id| self.var_set.var(**id).size())
+            .cloned()
+    }
+
+    pub fn choose_value(&self, var_id: VarId) -> Option<i32> {
+        self.var_set.var(var_id).possibilities().nth(0).cloned()
+    }
+
+    pub fn initial_propagation(&mut self) -> Result<(), ()> {
+        let mut domain_updates = vec![];
+        for &prop_id in &self.prop_set.prop_ids().clone() {
+            let updates = self.prop_set.propagator_mut(prop_id).initial_propagation(
+                &mut self.var_set,
+            )?;
+            for update in updates {
+                domain_updates.push(update);
+            }
+        }
+        for update in domain_updates {
+            self.propagate(update)?;
+        }
+        Ok(())
+    }
+}
+
+impl Solver {
+    pub fn new(var_set: VarSet, prop_set: PropSet) -> Solver {
+        let state = SearchState {
+            var_set: var_set,
+            prop_set: prop_set,
+            instantiated_vars: HashSet::new(),
+        };
+        Solver {
+            state_stack: vec![state],
+            initialized: false,
+        }
+    }
+}
+
+impl Iterator for Solver {
+    type Item = VarSet;
+
+    fn next(&mut self) -> Option<VarSet> {
+        if !self.initialized {
+            if let Err(_) = self.state_stack[0].initial_propagation() {
+                return None;
+            }
+            self.initialized = true;
+        }
+        while let Some(current_state) = self.state_stack.pop() {
+            if let Some(next_var) = current_state.choose_var() {
+                if let Some(next_value) = current_state.choose_value(next_var) {
+                    let (instantiated_state, removed_state) =
+                        current_state.instantiate(next_var, next_value);
+                    if let Some(state) = removed_state {
+                        self.state_stack.push(state);
+                    }
+                    if let Some(state) = instantiated_state {
+                        self.state_stack.push(state);
+                    }
+                } else {
+                    continue;
+                }
+            } else {
+                return Some(current_state.var_set);
+            }
+        }
+        None
+    }
+}
+
+#[cfg(test)]
+mod test {
+}
