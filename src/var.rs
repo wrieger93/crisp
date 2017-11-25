@@ -28,7 +28,7 @@ impl DomainUpdate {
 
 pub type VarResult<T> = Result<T, ()>;
 
-pub trait Variable {
+pub trait Variable: Clone {
     type Value: Clone;
 
     fn with_domain_and_id<I, Q>(values: I, id: VarId) -> Self
@@ -93,7 +93,6 @@ impl<T> Variable for BTreeSetVar<T> where T: Clone + Ord {
         Box::new(self.domain.iter())
     }
 
-
     fn remove(&mut self, value: &Self::Value) -> VarResult<DomainUpdate> {
         if self.domain.remove(value) {
             match self.size() {
@@ -123,15 +122,25 @@ impl<T> Variable for BTreeSetVar<T> where T: Clone + Ord {
 
 pub type Var = BTreeSetVar<i32>;
 
-#[derive(Clone, Debug, Default)]
-pub struct VarSet {
-    vars: Vec<Var>,
+#[derive(Debug)]
+pub struct VarSet<V> where V: Variable {
+    vars: Vec<V>,
     var_ids: Vec<VarId>,
     subscriptions: Vec<Vec<PropId>>,
 }
 
-impl VarSet {
-    pub fn new() -> VarSet {
+impl<V> Clone for VarSet<V> where V: Variable {
+    fn clone(&self) -> VarSet<V> {
+        VarSet {
+            vars: self.vars.clone(),
+            var_ids: self.var_ids.clone(),
+            subscriptions: self.subscriptions.clone(),
+        }
+    }
+}
+
+impl<V> VarSet<V> where V: Variable {
+    pub fn new() -> VarSet<V> {
         VarSet {
             vars: vec![],
             var_ids: vec![],
@@ -142,25 +151,25 @@ impl VarSet {
     pub fn create_var<I, Q>(&mut self, values: I) -> VarId
     where
         I: IntoIterator<Item = Q>,
-        Q: Borrow<i32>,
+        Q: Borrow<V::Value>,
     {
         let var_id = VarId { id: self.vars.len() };
-        let var = Var::with_domain_and_id(values, var_id);
+        let var = V::with_domain_and_id(values, var_id);
         self.vars.push(var);
         self.var_ids.push(var_id);
         self.subscriptions.push(vec![]);
         var_id
     }
 
-    pub fn set(&mut self, var_id: VarId, value: i32) {
-        self.var_mut(var_id).instantiate(&value);
+    pub fn set(&mut self, var_id: VarId, value: &V::Value) {
+        self.var_mut(var_id).instantiate(value);
     }
 
-    pub fn var(&self, var_id: VarId) -> &Var {
+    pub fn var(&self, var_id: VarId) -> &V {
         &self.vars[var_id.id]
     }
 
-    pub fn var_mut(&mut self, var_id: VarId) -> &mut Var {
+    pub fn var_mut(&mut self, var_id: VarId) -> &mut V {
         &mut self.vars[var_id.id]
     }
 

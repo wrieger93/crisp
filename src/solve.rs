@@ -3,32 +3,42 @@ use std::collections::{VecDeque, HashSet};
 use var::{VarId, VarSet, DomainUpdate, Variable};
 use propagate::PropSet;
 
-#[derive(Debug, Default)]
-pub struct Solver {
-    state_stack: Vec<SearchState>,
+#[derive(Debug)]
+pub struct Solver<V> where V: Variable {
+    state_stack: Vec<SearchState<V>>,
     initialized: bool,
 }
 
-#[derive(Clone, Debug, Default)]
-pub struct SearchState {
-    pub var_set: VarSet,
-    pub prop_set: PropSet,
+#[derive(Debug)]
+pub struct SearchState<V> where V: Variable {
+    pub var_set: VarSet<V>,
+    pub prop_set: PropSet<V>,
     pub instantiated_vars: HashSet<VarId>,
 }
 
-impl SearchState {
+impl<V> Clone for SearchState<V> where V: Variable {
+    fn clone(&self) -> SearchState<V> {
+        SearchState {
+            var_set: self.var_set.clone(),
+            prop_set: self.prop_set.clone(),
+            instantiated_vars: self.instantiated_vars.clone(),
+        }
+    }
+}
+
+impl<V> SearchState<V> where V: Variable {
     pub fn instantiate(
         self,
         var_id: VarId,
-        value: i32,
-    ) -> (Option<SearchState>, Option<SearchState>) {
+        value: &V::Value,
+    ) -> (Option<SearchState<V>>, Option<SearchState<V>>) {
         let mut instantiated_state = self.clone();
         let mut removed_state = self;
 
         let mut instantiated_state_retval = None;
         let mut removed_state_retval = None;
 
-        if let Ok(update) = removed_state.var_set.var_mut(var_id).remove(&value) {
+        if let Ok(update) = removed_state.var_set.var_mut(var_id).remove(value) {
             match removed_state.propagate(update) {
                 Ok(()) => {
                     removed_state_retval = Some(removed_state);
@@ -38,7 +48,7 @@ impl SearchState {
         }
 
         if let Ok(update) = instantiated_state.var_set.var_mut(var_id).instantiate(
-            &value,
+            value,
         )
         {
             match instantiated_state.propagate(update) {
@@ -86,8 +96,8 @@ impl SearchState {
             .cloned()
     }
 
-    pub fn choose_value(&self, var_id: VarId) -> Option<i32> {
-        self.var_set.var(var_id).possibilities().nth(0).cloned()
+    pub fn choose_value(&self, var_id: VarId) -> Option<&V::Value> {
+        self.var_set.var(var_id).possibilities().nth(0)
     }
 
     pub fn initial_propagation(&mut self) -> Result<(), ()> {
@@ -107,8 +117,8 @@ impl SearchState {
     }
 }
 
-impl Solver {
-    pub fn new(var_set: VarSet, prop_set: PropSet) -> Solver {
+impl<V> Solver<V> where V: Variable {
+    pub fn new(var_set: VarSet<V>, prop_set: PropSet<V>) -> Solver<V> {
         let state = SearchState {
             var_set: var_set,
             prop_set: prop_set,
@@ -121,10 +131,10 @@ impl Solver {
     }
 }
 
-impl Iterator for Solver {
-    type Item = VarSet;
+impl<V> Iterator for Solver<V> where V: Variable {
+    type Item = VarSet<V>;
 
-    fn next(&mut self) -> Option<VarSet> {
+    fn next(&mut self) -> Option<VarSet<V>> {
         if !self.initialized {
             if let Err(_) = self.state_stack[0].initial_propagation() {
                 return None;
@@ -133,9 +143,9 @@ impl Iterator for Solver {
         }
         while let Some(current_state) = self.state_stack.pop() {
             if let Some(next_var) = current_state.choose_var() {
-                if let Some(next_value) = current_state.choose_value(next_var) {
+                if let Some(next_value) = current_state.choose_value(next_var).cloned() {
                     let (instantiated_state, removed_state) =
-                        current_state.instantiate(next_var, next_value);
+                        current_state.instantiate(next_var, &next_value);
                     if let Some(state) = removed_state {
                         self.state_stack.push(state);
                     }

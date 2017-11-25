@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::borrow::Borrow;
+use std::marker::PhantomData;
 
 use var::{VarSet, VarId, DomainUpdate, Variable};
 
@@ -10,33 +11,47 @@ pub struct PropId {
 }
 
 pub trait Propagate: Debug {
+    type Variable: Variable;
+
     fn propagate(
         &mut self,
-        vars: &mut VarSet,
+        vars: &mut VarSet<Self::Variable>,
         update: DomainUpdate,
     ) -> Result<HashSet<DomainUpdate>, ()>;
 
-    fn initial_propagation(&mut self, vars: &mut VarSet) -> Result<HashSet<DomainUpdate>, ()>;
+    fn initial_propagation(&mut self, vars: &mut VarSet<Self::Variable>) -> Result<HashSet<DomainUpdate>, ()>;
 
-    fn boxed_clone(&self) -> Box<Propagate>;
+    fn boxed_clone(&self) -> Box<Propagate<Variable = Self::Variable>>;
 
     fn set_id(&mut self, id: PropId);
 }
 
-#[derive(Clone, Debug, Default)]
-pub struct PropSet {
-    propagators: Vec<Box<Propagate>>,
+#[derive(Debug)]
+pub struct PropSet<V> where V: Variable {
+    propagators: Vec<Box<Propagate<Variable = V>>>,
     prop_ids: Vec<PropId>,
 }
 
-impl PropSet {
-    pub fn new() -> PropSet {
-        PropSet::default()
+impl<V> Clone for PropSet<V> where V: Variable {
+    fn clone(&self) -> PropSet<V> {
+        PropSet {
+            propagators: self.propagators.clone(),
+            prop_ids: self.prop_ids.clone(),
+        }
+    }
+}
+
+impl<V> PropSet<V> where V: Variable {
+    pub fn new() -> PropSet<V> {
+        PropSet {
+            propagators: vec![],
+            prop_ids: vec![],
+        }
     }
 
     pub fn add_propagator<P>(&mut self, mut propagator: P) -> PropId
     where
-        P: Propagate + 'static,
+        P: Propagate<Variable = V> + 'static,
     {
         let prop_id = PropId { id: self.propagators.len() };
         self.prop_ids.push(prop_id);
@@ -45,11 +60,11 @@ impl PropSet {
         prop_id
     }
 
-    pub fn propagator(&self, prop_id: PropId) -> &Box<Propagate> {
+    pub fn propagator(&self, prop_id: PropId) -> &Box<Propagate<Variable = V>> {
         &self.propagators[prop_id.id]
     }
 
-    pub fn propagator_mut(&mut self, prop_id: PropId) -> &mut Box<Propagate> {
+    pub fn propagator_mut(&mut self, prop_id: PropId) -> &mut Box<Propagate<Variable = V>> {
         &mut self.propagators[prop_id.id]
     }
 
@@ -58,34 +73,37 @@ impl PropSet {
     }
 }
 
-impl Clone for Box<Propagate> {
-    fn clone(&self) -> Box<Propagate> {
+impl<V> Clone for Box<Propagate<Variable = V>> where V: Variable {
+    fn clone(&self) -> Box<Propagate<Variable = V>> {
         self.boxed_clone()
     }
 }
 
 #[derive(Clone, Debug)]
-pub struct AllDifferent {
-    var_ids: HashSet<VarId>,
+pub struct AllDifferent<V> {
     id: PropId,
+    var_ids: HashSet<VarId>,
+    phantom: PhantomData<V>,
 }
 
-impl AllDifferent {
-    pub fn new<I, Q>(var_ids: I) -> AllDifferent
+impl<V> AllDifferent<V> {
+    pub fn new<I, Q>(var_ids: I) -> AllDifferent<V>
     where
         I: IntoIterator<Item = Q>,
         Q: Borrow<VarId>,
     {
         let mut hashset = HashSet::new();
         hashset.extend(var_ids.into_iter().map(|id| *id.borrow()));
-        AllDifferent { var_ids: hashset, id: PropId { id: 0 }, }
+        AllDifferent { var_ids: hashset, id: PropId { id: 0 }, phantom: PhantomData::default(), }
     }
 }
 
-impl Propagate for AllDifferent {
+impl<V> Propagate for AllDifferent<V> where V: Variable + Debug + Clone + 'static {
+    type Variable = V;
+
     fn propagate(
         &mut self,
-        vars: &mut VarSet,
+        vars: &mut VarSet<V>,
         update: DomainUpdate,
     ) -> Result<HashSet<DomainUpdate>, ()> {
         let mut domain_updates = HashSet::new();
@@ -103,7 +121,7 @@ impl Propagate for AllDifferent {
         Ok(domain_updates)
     }
 
-    fn initial_propagation(&mut self, vars: &mut VarSet) -> Result<HashSet<DomainUpdate>, ()> {
+    fn initial_propagation(&mut self, vars: &mut VarSet<V>) -> Result<HashSet<DomainUpdate>, ()> {
         for &var_id in &self.var_ids {
             vars.subscribe(var_id, self.id);
         }
@@ -121,8 +139,8 @@ impl Propagate for AllDifferent {
         Ok(domain_updates)
     }
 
-    fn boxed_clone(&self) -> Box<Propagate> {
-        Box::new(self.clone())
+    fn boxed_clone(&self) -> Box<Propagate<Variable = V>> {
+        Box::new((*self).clone())
     }
 
     fn set_id(&mut self, id: PropId) {
