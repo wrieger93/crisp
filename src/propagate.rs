@@ -10,7 +10,7 @@ pub struct PropId {
     id: usize,
 }
 
-pub trait Propagate: Debug {
+pub trait Propagate {
     type Variable: Variable;
 
     fn propagate(
@@ -19,29 +19,38 @@ pub trait Propagate: Debug {
         update: DomainUpdate,
     ) -> Result<HashSet<DomainUpdate>, ()>;
 
-    fn initial_propagation(&mut self, vars: &mut VarSet<Self::Variable>) -> Result<HashSet<DomainUpdate>, ()>;
+    fn initial_propagation(
+        &mut self,
+        vars: &mut VarSet<Self::Variable>,
+    ) -> Result<HashSet<DomainUpdate>, ()>;
 
     fn boxed_clone(&self) -> Box<Propagate<Variable = Self::Variable>>;
 
     fn set_id(&mut self, id: PropId);
 }
 
-#[derive(Debug)]
-pub struct PropSet<V> where V: Variable {
+impl<V> Clone for Box<Propagate<Variable = V>>
+where
+    V: Variable,
+{
+    fn clone(&self) -> Box<Propagate<Variable = V>> {
+        self.boxed_clone()
+    }
+}
+
+#[derive(Clone)]
+pub struct PropSet<V>
+where
+    V: Variable,
+{
     propagators: Vec<Box<Propagate<Variable = V>>>,
     prop_ids: Vec<PropId>,
 }
 
-impl<V> Clone for PropSet<V> where V: Variable {
-    fn clone(&self) -> PropSet<V> {
-        PropSet {
-            propagators: self.propagators.clone(),
-            prop_ids: self.prop_ids.clone(),
-        }
-    }
-}
-
-impl<V> PropSet<V> where V: Variable {
+impl<V> PropSet<V>
+where
+    V: Variable,
+{
     pub fn new() -> PropSet<V> {
         PropSet {
             propagators: vec![],
@@ -73,12 +82,6 @@ impl<V> PropSet<V> where V: Variable {
     }
 }
 
-impl<V> Clone for Box<Propagate<Variable = V>> where V: Variable {
-    fn clone(&self) -> Box<Propagate<Variable = V>> {
-        self.boxed_clone()
-    }
-}
-
 #[derive(Clone, Debug)]
 pub struct AllDifferent<V> {
     id: PropId,
@@ -94,11 +97,18 @@ impl<V> AllDifferent<V> {
     {
         let mut hashset = HashSet::new();
         hashset.extend(var_ids.into_iter().map(|id| *id.borrow()));
-        AllDifferent { var_ids: hashset, id: PropId { id: 0 }, phantom: PhantomData::default(), }
+        AllDifferent {
+            var_ids: hashset,
+            id: PropId { id: 0 },
+            phantom: PhantomData::default(),
+        }
     }
 }
 
-impl<V> Propagate for AllDifferent<V> where V: Variable + Debug + Clone + 'static {
+impl<V> Propagate for AllDifferent<V>
+where
+    V: Variable + Clone + 'static,
+{
     type Variable = V;
 
     fn propagate(

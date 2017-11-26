@@ -3,30 +3,20 @@ use std::collections::{VecDeque, HashSet};
 use var::{VarId, VarSet, DomainUpdate, Variable};
 use propagate::PropSet;
 
-#[derive(Debug)]
-pub struct Solver<V> where V: Variable {
-    state_stack: Vec<SearchState<V>>,
-    initialized: bool,
-}
-
-#[derive(Debug)]
-pub struct SearchState<V> where V: Variable {
+#[derive(Clone)]
+pub struct SearchState<V>
+where
+    V: Variable,
+{
     pub var_set: VarSet<V>,
     pub prop_set: PropSet<V>,
     pub instantiated_vars: HashSet<VarId>,
 }
 
-impl<V> Clone for SearchState<V> where V: Variable {
-    fn clone(&self) -> SearchState<V> {
-        SearchState {
-            var_set: self.var_set.clone(),
-            prop_set: self.prop_set.clone(),
-            instantiated_vars: self.instantiated_vars.clone(),
-        }
-    }
-}
-
-impl<V> SearchState<V> where V: Variable {
+impl<V> SearchState<V>
+where
+    V: Variable,
+{
     pub fn instantiate(
         self,
         var_id: VarId,
@@ -117,7 +107,19 @@ impl<V> SearchState<V> where V: Variable {
     }
 }
 
-impl<V> Solver<V> where V: Variable {
+#[derive(Clone)]
+pub struct Solver<V>
+where
+    V: Variable,
+{
+    state_stack: Vec<SearchState<V>>,
+    initialized: bool,
+}
+
+impl<V> Solver<V>
+where
+    V: Variable,
+{
     pub fn new(var_set: VarSet<V>, prop_set: PropSet<V>) -> Solver<V> {
         let state = SearchState {
             var_set: var_set,
@@ -131,7 +133,10 @@ impl<V> Solver<V> where V: Variable {
     }
 }
 
-impl<V> Iterator for Solver<V> where V: Variable {
+impl<V> Iterator for Solver<V>
+where
+    V: Variable,
+{
     type Item = VarSet<V>;
 
     fn next(&mut self) -> Option<VarSet<V>> {
@@ -164,5 +169,4 @@ impl<V> Iterator for Solver<V> where V: Variable {
 }
 
 #[cfg(test)]
-mod test {
-}
+mod test {}

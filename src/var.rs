@@ -1,10 +1,9 @@
-use std::collections::BTreeSet;
-use std::collections::btree_set;
+use std::collections::{BTreeSet, HashSet};
 use std::borrow::Borrow;
 
 use propagate::PropId;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, PartialOrd, Ord, Hash)]
 pub struct VarId {
     id: usize,
 }
@@ -31,12 +30,13 @@ pub type VarResult<T> = Result<T, ()>;
 pub trait Variable: Clone {
     type Value: Clone;
 
-    fn with_domain_and_id<I, Q>(values: I, id: VarId) -> Self
+    fn with_domain<I, Q>(values: I) -> Self
     where
         I: IntoIterator<Item = Q>,
         Q: Borrow<Self::Value>;
 
     fn id(&self) -> VarId;
+    fn set_id(&mut self, id: VarId);
 
     fn size(&self) -> usize;
     fn contains(&self, value: &Self::Value) -> bool;
@@ -53,10 +53,13 @@ pub struct BTreeSetVar<T> {
     domain: BTreeSet<T>,
 }
 
-impl<T> Variable for BTreeSetVar<T> where T: Clone + Ord {
+impl<T> Variable for BTreeSetVar<T>
+where
+    T: Clone + Ord,
+{
     type Value = T;
 
-    fn with_domain_and_id<I, Q>(values: I, id: VarId) -> Self
+    fn with_domain<I, Q>(values: I) -> BTreeSetVar<T>
     where
         I: IntoIterator<Item = Q>,
         Q: Borrow<T>,
@@ -64,13 +67,17 @@ impl<T> Variable for BTreeSetVar<T> where T: Clone + Ord {
         let mut domain = BTreeSet::new();
         domain.extend(values.into_iter().map(|q| q.borrow().clone()));
         BTreeSetVar {
-            id: id,
+            id: VarId::default(),
             domain: domain,
         }
     }
 
     fn id(&self) -> VarId {
         self.id
+    }
+
+    fn set_id(&mut self, id: VarId) {
+        self.id = id;
     }
 
     fn size(&self) -> usize {
@@ -120,26 +127,103 @@ impl<T> Variable for BTreeSetVar<T> where T: Clone + Ord {
     }
 }
 
-pub type Var = BTreeSetVar<i32>;
+#[derive(Clone, Debug)]
+pub struct HashSetVar<T>
+where
+    T: Eq + ::std::hash::Hash,
+{
+    id: VarId,
+    domain: HashSet<T>,
+}
 
-#[derive(Debug)]
-pub struct VarSet<V> where V: Variable {
+impl<T> Variable for HashSetVar<T>
+where
+    T: Clone + Eq + ::std::hash::Hash,
+{
+    type Value = T;
+
+    fn with_domain<I, Q>(values: I) -> HashSetVar<T>
+    where
+        I: IntoIterator<Item = Q>,
+        Q: Borrow<T>,
+    {
+        let mut domain = HashSet::new();
+        domain.extend(values.into_iter().map(|q| q.borrow().clone()));
+        HashSetVar {
+            id: VarId::default(),
+            domain: domain,
+        }
+    }
+
+    fn id(&self) -> VarId {
+        self.id
+    }
+
+    fn set_id(&mut self, id: VarId) {
+        self.id = id;
+    }
+
+    fn size(&self) -> usize {
+        self.domain.len()
+    }
+
+    fn contains(&self, value: &Self::Value) -> bool {
+        self.domain.contains(value)
+    }
+
+    fn value(&self) -> Option<&Self::Value> {
+        if self.size() == 1 {
+            self.domain.iter().nth(0)
+        } else {
+            None
+        }
+    }
+
+    fn possibilities<'a>(&'a self) -> Box<Iterator<Item = &Self::Value> + 'a> {
+        Box::new(self.domain.iter())
+    }
+
+    fn remove(&mut self, value: &Self::Value) -> VarResult<DomainUpdate> {
+        if self.domain.remove(value) {
+            match self.size() {
+                0 => Err(()),
+                1 => Ok(DomainUpdate::Fixed(self.id)),
+                _ => Ok(DomainUpdate::Reduced(self.id)),
+            }
+        } else {
+            Ok(DomainUpdate::Unchanged(self.id))
+        }
+    }
+
+    fn instantiate(&mut self, value: &Self::Value) -> VarResult<DomainUpdate> {
+        if self.contains(value) {
+            if self.size() == 1 {
+                Ok(DomainUpdate::Unchanged(self.id))
+            } else {
+                self.domain = HashSet::new();
+                self.domain.insert(value.clone());
+                Ok(DomainUpdate::Fixed(self.id))
+            }
+        } else {
+            Err(())
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct VarSet<V>
+where
+    V: Variable,
+{
     vars: Vec<V>,
     var_ids: Vec<VarId>,
     subscriptions: Vec<Vec<PropId>>,
 }
 
-impl<V> Clone for VarSet<V> where V: Variable {
-    fn clone(&self) -> VarSet<V> {
-        VarSet {
-            vars: self.vars.clone(),
-            var_ids: self.var_ids.clone(),
-            subscriptions: self.subscriptions.clone(),
-        }
-    }
-}
-
-impl<V> VarSet<V> where V: Variable {
+impl<V> VarSet<V>
+where
+    V: Variable,
+{
     pub fn new() -> VarSet<V> {
         VarSet {
             vars: vec![],
@@ -154,7 +238,8 @@ impl<V> VarSet<V> where V: Variable {
         Q: Borrow<V::Value>,
     {
         let var_id = VarId { id: self.vars.len() };
-        let var = V::with_domain_and_id(values, var_id);
+        let mut var = V::with_domain(values);
+        var.set_id(var_id);
         self.vars.push(var);
         self.var_ids.push(var_id);
         self.subscriptions.push(vec![]);
@@ -162,7 +247,9 @@ impl<V> VarSet<V> where V: Variable {
     }
 
     pub fn set(&mut self, var_id: VarId, value: &V::Value) {
-        self.var_mut(var_id).instantiate(value);
+        let mut new_var = V::with_domain(vec![value]);
+        new_var.set_id(var_id);
+        self.vars[var_id.id] = new_var;
     }
 
     pub fn var(&self, var_id: VarId) -> &V {
